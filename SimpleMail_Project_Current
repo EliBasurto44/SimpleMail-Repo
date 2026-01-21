@@ -1,0 +1,336 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from langchain_openai import ChatOpenAI
+
+from langchain.chat_models import init_chat_model
+
+from langgraph.prebuilt import create_react_agent
+
+import getpass
+
+from langchain_openai import ChatOpenAI
+from langchain.tools import tool
+from langchain.agents import AgentExecutor, create_structured_chat_agent, create_openai_tools_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, SystemMessagePromptTemplate, \
+    HumanMessagePromptTemplate
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+
+import pyttsx3
+import speech_recognition as sr
+
+import argparse
+import re
+import time
+
+import gradio as gr
+import smtplib, ssl
+import imaplib
+import email
+from email.header import decode_header
+
+global systemOutput
+systemOutput = ""
+
+LLM = ChatOpenAI(
+    model="mistralai/devstral-2512:free",
+    temperature=0.8,
+    openai_api_base='https://openrouter.ai/api/v1',
+)
+
+
+@tool
+def emailSend(recieverEmail:str, emailText:str):
+    """run this if the user is trying to send an email
+
+    args:
+        recieverEmail (String): string of the email address of who the email is being sent to
+        emailText (String): string of what the body of the email should say
+
+
+    returns:
+        string: string letting user know the email was sent
+
+    """
+    global systemOutput
+    port = 465  # For SSL
+
+    message = emailText
+
+    # Create a secure SSL context
+    context = ssl.create_default_context()
+
+    # logging in with smtplib and sending email
+    with smtplib.SMTP_SSL("smtp.gmail.com", port, context=context) as server:
+        server.login(realEmail, realPassword)
+
+        server.sendmail(realEmail, recieverEmail, message)
+
+
+    systemOutput = "email sent"
+
+    return "email sent"
+
+
+
+
+
+@tool
+def readEmails(numEmails:int):
+    """run this if the user is trying to read through their emails/inbox
+    when used do not show the user the email ID and make sure to shorten any links given for the user so it is easier to read
+    make sure to cleary separate the different emails for the user
+    be certain to shorten all links for the user in each and every email: do not ever mess this up be sure you are doing it
+
+    args:
+        numEmails (int): number of emails to read
+
+    returns:
+        string: string containing all emails read (including email IDs)
+
+    """
+    global systemOutput
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+
+    emailString = ""
+
+    imap.login(realEmail, realPassword)
+    # selects folder
+    status, messages = imap.select("INBOX")
+
+    # numberToGet of top emails to fetch
+    numberToGet = numEmails
+
+    # total numberToGet of emails
+    totalMessages = int(messages[0])
+    if numberToGet > totalMessages:
+        numberToGet = totalMessages
+
+
+
+    for i in range(totalMessages, totalMessages - numberToGet, -1):
+        # fetch the email message by ID
+        res, msg = imap.fetch(str(i), "(RFC822)")
+        for response in msg:
+            if isinstance(response, tuple):
+                # parse a bytes email into a message object
+                msg = email.message_from_bytes(response[1])
+
+
+                # Use .get("Subject", "") to provide an empty string if Subject is None
+                subject_header = msg.get("Subject", "")
+                if subject_header: # Only decode if subject_header is not empty
+                    subject, encoding = decode_header(subject_header)[0]
+                    if isinstance(subject, bytes):
+                        # if it's a bytes, decode to str
+                        subject = subject.decode(encoding if encoding else 'utf-8', errors='ignore')
+                else:
+                    subject = "No Subject" # Default subject if header is missing
+
+                # decode email sender
+                from_header = msg.get("From", "")
+                if from_header: # Only decode if from_header is not empty
+                    From, encoding = decode_header(from_header)[0]
+                    if isinstance(From, bytes):
+                        From = From.decode(encoding if encoding else 'utf-8', errors='ignore')
+                else:
+                    From = "Unknown Sender" # Default sender if header is missing
+                emailString += f"Email ID: {i}\n"
+                emailString += f"Subject: {subject}\n"
+                emailString += f"From: {From}\n"
+                emailString += "Body:\n"
+
+
+                # if the email message is multipart
+                if msg.is_multipart():
+                    # iterate over email parts
+                    for part in msg.walk():
+                        # extract content type of email
+                        content_type = part.get_content_type()
+                        content_disposition = str(part.get("Content-Disposition"))
+                        try:
+                            # get the email body
+                            body = part.get_payload(decode=True).decode()
+                        except:
+                            body = "[Could not decode body]" # Handle decoding errors
+                            pass
+                        if content_type == "text/plain" and "attachment" not in content_disposition:
+                            # print text/plain emails and skip attachments
+
+                            emailString += body
+
+                else:
+                    # extract content type of email
+                    content_type = msg.get_content_type()
+                    # get the email body
+                    body = msg.get_payload(decode=True).decode()
+                    if content_type == "text/plain":
+                        # print only text email parts
+                        emailString += body
+
+
+                emailString += "\n" + "="*150 + "\n"
+
+
+    # close the connection and logout
+    imap.close()
+    imap.logout()
+    systemOutput += emailString
+    return emailString
+
+
+
+
+
+
+
+@tool
+def getFolders():
+    """run this if the user is trying to see what folders they have
+
+    args:
+        none
+
+    returns:
+        string: string containing name of each folder
+
+    """
+    global systemOutput
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    folderlist = ""
+
+
+    imap.login(realEmail, realPassword)
+    imap.select("INBOX")
+    # prints list of folders
+    for i in imap.list()[1]:
+        l = i.decode().split(' "/" ')
+        folderlist += l[1]
+
+
+    # close the connection and logout
+
+    imap.close()
+    imap.logout()
+    systemOutput = folderlist
+    return folderlist
+
+@tool
+def createFolder(folderName:str):
+    """run this if the user is trying to create a new folder
+
+        args:
+            folderName (String): string of what the name of the folder should be
+
+        returns:
+            string: string letting user know the folder was created
+
+        """
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    imap.login(realEmail, realPassword)
+
+    imap.create(folderName)
+
+    imap.logout()
+    return "Folder created named: " + folderName
+
+
+
+@tool
+def moveEmail(folderDestination:str, emailID:int):
+    """run this if the user is trying to move an email identified by the ID from readEmails to a specific folder
+    make sure to use readEmails first if you do not know the ID
+
+        args:
+            folderDestination (String): string of what the name of the folder that user is moving email to
+            emailID (Integer): integer of the id of the email to move
+
+        returns:
+            string: string letting user know email was moved
+
+        """
+
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    imap.login(realEmail, realPassword)
+    pattern_uid = re.compile(r'\d+ \(UID (?P<uid>\d+)\)')
+
+    imap.select(mailbox='INBOX', readonly=False)
+    resp, items = imap.search(None, 'All')
+    #email_ids = items[0].split()
+    actual_email_id = str(emailID)
+
+    resp, data = imap.fetch(actual_email_id, "(UID)")
+
+    match = pattern_uid.match(data[0].decode())
+
+    msg_uid = match.group('uid')
+
+    result = imap.uid('COPY', msg_uid, folderDestination)
+
+    if result[0] == 'OK':
+        mov, data = imap.uid('STORE', msg_uid, '+FLAGS', '(\\Deleted)')
+        imap.expunge()
+    imap.logout()
+
+    return "Email moved"
+
+
+tools = [getFolders, readEmails, emailSend,createFolder, moveEmail]
+
+
+systemPrompt = (
+    "As an AI email assistant, you can use the following tools: {tool_names}. "
+    "Always use a tool when it fits the user's request. If not, provide a direct answer."
+    "the user cannot see the Tool Messages, only the AI message response, so write out any tool strings returned from tool call in you message so that the user can see them"
+    "do not make any comments that could insult the user such as you have already seen this, just show them what they ask for"
+    "make sure that whenever you see a link it is shortened in your output for the user: this is mandatory and should be checked before giving any output to the user"
+
+).format(tool_names=[t.name for t in tools])
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("user", "{input}")
+    ]
+)
+
+
+
+
+
+
+
+
+
+
+graph = create_react_agent(LLM, tools=tools, prompt=systemPrompt)
+
+messages = []
+
+def runAgent(userPrompt, history):
+
+    print(userPrompt)
+    
+
+    messages.extend(prompt.invoke({
+        "input": userPrompt,
+    }).to_messages())
+
+    response = graph.invoke({
+        "messages": messages
+    })
+
+    for message in response["messages"][len(messages):]:
+        message.pretty_print()
+        messages.append(message)
+
+    return messages[-1].content
+
+
+
+
+
+
+test = gr.ChatInterface(runAgent, type="messages", autofocus=False)
+
+test.launch()
